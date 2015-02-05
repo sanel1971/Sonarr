@@ -159,7 +159,7 @@ namespace NzbDrone.Core.Test.MediaCoverTests
 
             Subject.HandleAsync(new SeriesUpdatedEvent(_series));
 
-            ExceptionVerification.ExpectedErrors(1);
+            ExceptionVerification.ExpectedWarns(2);
         }
     }
 }
