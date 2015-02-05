@@ -157,7 +157,7 @@ namespace NzbDrone.Core.MediaCover
                     }
                     catch (Exception e)
                     {
-                        _logger.WarnException(string.Format("Couldn't resize media cover {0}-{1} for {2}, using full size image instead. (See forum thread)", cover.CoverType, height, series), e);
+                        _logger.DebugException(string.Format("Couldn't resize media cover {0}-{1} for {2}, using full size image instead. (See forum thread)", cover.CoverType, height, series), e);
                     }
                 }
             }

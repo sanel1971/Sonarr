@@ -143,7 +143,7 @@ namespace NzbDrone.Core.Test.MediaCoverTests
         }
 
         [Test]
-        public void should_log_error_if_resize_failed()
+        public void should_continue_if_resize_failed()
         {
             Mocker.GetMock<ICoverExistsSpecification>()
                   .Setup(v => v.AlreadyExists(It.IsAny<string>(), It.IsAny<string>()))
@@ -159,7 +159,8 @@ namespace NzbDrone.Core.Test.MediaCoverTests
 
             Subject.HandleAsync(new SeriesUpdatedEvent(_series));
 
-            ExceptionVerification.ExpectedWarns(2);
+            Mocker.GetMock<IImageResizer>()
+                  .Verify(v => v.Resize(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>()), Times.Exactly(2));
         }
     }
 }
