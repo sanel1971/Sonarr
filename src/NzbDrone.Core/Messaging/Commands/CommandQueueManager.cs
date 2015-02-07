@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using NLog;
+using NLog.LogReceiverService;
 using NzbDrone.Common;
 using NzbDrone.Common.Cache;
 using NzbDrone.Common.EnsureThat;
@@ -29,20 +30,22 @@ namespace NzbDrone.Core.Messaging.Commands
         private readonly IServiceFactory _serviceFactory;
         private readonly Logger _logger;
 
-        private ICached<string> _messageCache; 
+        private ICached<string> _messageCache;
+        private ICached<CommandModel> _commandCache; 
 
         private static readonly object Mutex = new object();
 
         public CommandQueueManager(ICommandRepository repo, 
-                              IServiceFactory serviceFactory,
-                              ICacheManager cacheManager,
-                              Logger logger)
+                                   IServiceFactory serviceFactory,
+                                   ICacheManager cacheManager,
+                                   Logger logger)
         {
             _repo = repo;
             _serviceFactory = serviceFactory;
             _logger = logger;
 
-            _messageCache = cacheManager.GetCache<string>(GetType());
+            _messageCache = cacheManager.GetCache<string>(GetType(), "messages");
+            _commandCache = cacheManager.GetCache<CommandModel>(GetType(), "commands");
         }
 
         public CommandModel Push<TCommand>(TCommand command, CommandPriority priority = CommandPriority.Normal, CommandTrigger trigger = CommandTrigger.Unspecified) where TCommand : Command
@@ -53,7 +56,7 @@ namespace NzbDrone.Core.Messaging.Commands
 
             lock (Mutex)
             {
-                var existingCommands = _repo.FindQueuedOrStarted(command.Name);
+                var existingCommands = _commandCache.Values.ToList();
                 var existing = existingCommands.SingleOrDefault(c => CommandEqualityComparer.Instance.Equals(c.Body, command));
 
                 if (existing != null)
@@ -74,6 +77,7 @@ namespace NzbDrone.Core.Messaging.Commands
                                    };
 
                 _repo.Insert(commandModel);
+                _commandCache.Set(commandModel.Id.ToString(), commandModel);
 
                 return commandModel;
             }
@@ -92,7 +96,11 @@ namespace NzbDrone.Core.Messaging.Commands
         {
             lock (Mutex)
             {
-                var nextCommand = _repo.Next();
+                var nextCommand = _commandCache.Values
+                                               .Where(c => c.Status == CommandStatus.Queued)
+                                               .OrderByDescending(c => c.Priority)
+                                               .ThenBy(c => c.QueuedAt)
+                                               .FirstOrDefault();
 
                 if (nextCommand == null)
                 {
@@ -103,6 +111,7 @@ namespace NzbDrone.Core.Messaging.Commands
                 nextCommand.Status = CommandStatus.Started;
 
                 _repo.Update(nextCommand);
+                _commandCache.Set(nextCommand.Id.ToString(), nextCommand);
 
                 return nextCommand;
             }
@@ -125,22 +134,27 @@ namespace NzbDrone.Core.Messaging.Commands
 
         public void Completed(CommandModel command)
         {
-            command.EndedAt = DateTime.UtcNow;
-            command.Duration = command.EndedAt.Value.Subtract(command.StartedAt.Value);
-            command.Status = CommandStatus.Completed;
-
-            _repo.Update(command);
-
-            _messageCache.Remove(command.Id.ToString());
+            Update(command, CommandStatus.Completed);
         }
 
         public void Failed(CommandModel command, Exception e)
         {
+//            command.Exception = e.ToString();
+
+            Update(command, CommandStatus.Failed);
+        }
+
+        private void Update(CommandModel command, CommandStatus status)
+        {
             command.EndedAt = DateTime.UtcNow;
             command.Duration = command.EndedAt.Value.Subtract(command.StartedAt.Value);
-            command.Status = CommandStatus.Failed;
+            command.Status = status;
 
-            _repo.Update(command);
+            lock (Mutex)
+            {
+                _repo.Update(command);
+                _commandCache.Remove(command.Id.ToString());
+            }
 
             _messageCache.Remove(command.Id.ToString());
         }
@@ -164,7 +178,15 @@ namespace NzbDrone.Core.Messaging.Commands
 
         public void Handle(ApplicationStartedEvent message)
         {
-            _repo.OrphanStarted();
+            lock (Mutex)
+            {
+                _repo.OrphanStarted();
+
+                foreach (var command in _repo.Queued())
+                {
+                    _commandCache.Set(command.Id.ToString(), command);
+                }
+            }
         }
     }
 }
